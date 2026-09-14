@@ -158,8 +158,7 @@ test.describe('坐标换算台', () => {
     await expect(page.getByTestId('result-table')).toHaveCount(0);
   });
 
-  test('设计侧基准重合时拒绝', async ({ page }) => {
-    await fillBases(page, {
+  test('设计侧基准重合时拒绝', async ({ page }) => {    await fillBases(page, {
       ax: '5', ay: '5', bx: '5', by: '5',
       apx: '0', apy: '0', bpx: '1000', bpy: '0',
     });
@@ -187,5 +186,40 @@ test.describe('坐标换算台', () => {
 
     await page.getByRole('button', { name: '删除第 3 个落点' }).click();
     await expect(page.getByTestId('result-table').locator('tbody tr')).toHaveCount(2);
+  });
+
+  test('两个落点同名时仍保留并分别换算', async ({ page }) => {
+    await fillBases(page, {
+      ax: '0', ay: '0', bx: '1000', by: '0',
+      apx: '0', apy: '0', bpx: '1000', bpy: '0',
+    });
+    await fillPoint(page, 1, '灯位', '100', '0');
+    await fillPoint(page, 2, '灯位', '0', '100');
+
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    const rows = page.getByTestId('result-table').locator('tbody tr');
+    await expect(rows).toHaveCount(2);
+    // 两个同名落点各自换算，坐标不同
+    await expect(rows.nth(0).locator('td').nth(3)).toHaveText('100.00');
+    await expect(rows.nth(0).locator('td').nth(4)).toHaveText('0.00');
+    await expect(rows.nth(1).locator('td').nth(3)).toHaveText('0.00');
+    await expect(rows.nth(1).locator('td').nth(4)).toHaveText('100.00');
+  });
+
+  test('极大但有限的落点坐标导致溢出时整批拒绝，并提示超出计算范围', async ({ page }) => {
+    // 缩放率 2：现场坐标 2×1e308 = Infinity；输入本身仍是有限数
+    await fillBases(page, {
+      ax: '0', ay: '0', bx: '1000', by: '0',
+      apx: '0', apy: '0', bpx: '2000', bpy: '0',
+    });
+    await fillPoint(page, 1, '巨值点', '1e308', '0');
+    await fillPoint(page, 2, '正常点', '1', '1');
+
+    const alert = page.getByRole('alert');
+    await expect(alert).toBeVisible();
+    await expect(alert).toContainText('超出数值范围');
+    // 不允许出现空缺符号或残缺结果
+    await expect(page.getByTestId('result-table')).toHaveCount(0);
+    await expect(page.getByText('—')).toHaveCount(0);
   });
 });

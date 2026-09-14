@@ -262,16 +262,93 @@ describe('solveSimilarity 无效边界（整批拒绝）', () => {
     expect(r.errors.join(' ')).toContain('名称');
   });
 
-  it('落点名称重复时拒绝', () => {
+  it('极大但有限的落点坐标导致中间结果溢出时，整批拒绝并提示超出计算范围', () => {
+    // 缩放率 2：现场坐标 2×1e308 = Infinity（输入本身仍是有限数）
     const r = solveSimilarity({
-      ...base,
+      A: { x: 0, y: 0 },
+      B: { x: 1000, y: 0 },
+      Ap: { x: 0, y: 0 },
+      Bp: { x: 2000, y: 0 },
+      points: [{ name: '巨值点', x: 1e308, y: 0 }],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.join(' ')).toContain('超出数值范围');
+  });
+
+  it('缩放率有限但落点映射溢出时，拒绝并提示超出计算范围', () => {
+    // 现场向量长 1e150（平方 1e300 仍有限），设计向量长 1000，缩放率 1e147（有限）；
+    // 落点 1e308 映射为 1e147·1e308 = Infinity。
+    const r = solveSimilarity({
+      A: { x: 0, y: 0 },
+      B: { x: 1000, y: 0 },
+      Ap: { x: 0, y: 0 },
+      Bp: { x: 1e150, y: 0 },
+      points: [{ name: '巨值点', x: 1e308, y: 0 }],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.join(' ')).toContain('超出数值范围');
+  });
+
+  it('模长平方溢出导致缩放率为 Infinity 时同样拒绝', () => {
+    // 现场向量长 1e308：平方得 Infinity，缩放率 Infinity
+    const r = solveSimilarity({
+      A: { x: 0, y: 0 },
+      B: { x: 1000, y: 0 },
+      Ap: { x: 0, y: 0 },
+      Bp: { x: 1e308, y: 0 },
+      points: [{ name: 'P', x: 1, y: 1 }],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.join(' ')).toMatch(/缩放率|数值范围/);
+  });
+
+  it('极大基准点使平移量溢出时拒绝', () => {
+    // 缩放率 1e10：tx = −1e10·1e308 = −Infinity
+    const r = solveSimilarity({
+      A: { x: 1e308, y: 0 },
+      B: { x: 1e308, y: 1 },
+      Ap: { x: 0, y: 0 },
+      Bp: { x: 0, y: 1e10 },
+      points: [{ name: 'P', x: 1e308, y: 0 }],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.join(' ')).toContain('超出数值范围');
+  });
+
+  it('同批中只有一个落点越界时，整批拒绝（不返回其他落点的部分结果）', () => {
+    const r = solveSimilarity({
+      A: { x: 0, y: 0 },
+      B: { x: 1000, y: 0 },
+      Ap: { x: 0, y: 0 },
+      Bp: { x: 2000, y: 0 },
       points: [
-        { name: '灯位', x: 1, y: 1 },
-        { name: '灯位', x: 2, y: 2 },
+        { name: '正常点', x: 100, y: 0 },
+        { name: '越界点', x: 1e308, y: 0 },
       ],
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.errors.join(' ')).toContain('重复');
+    expect(r.errors.join(' ')).toContain('越界点');
+  });
+
+  it('落点名称重复时仍然保留并分别换算两个落点', () => {
+    const r = solveSimilarity({
+      ...base,
+      points: [
+        { name: '灯位', x: 100, y: 0 },
+        { name: '灯位', x: 0, y: 100 },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.rows).toHaveLength(2);
+    expect(r.value.rows.map((row) => row.name)).toEqual(['灯位', '灯位']);
+    // 恒等基准下两个点分别换算，互不影响
+    expect(r.value.rows[0].site).toEqual({ x: 100, y: 0 });
+    expect(r.value.rows[1].site).toEqual({ x: 0, y: 100 });
   });
 });

@@ -107,15 +107,10 @@ export function solveSimilarity(input: TransformInput): SolveOutcome {
   if (input.points.length === 0) {
     errors.push('至少需要录入一个具名落点。');
   }
-  const seenNames = new Set<string>();
+  // 名称仅作展示标签：允许重名（两个落点都会保留并分别换算），只拒绝空名称。
   for (let i = 0; i < input.points.length; i++) {
-    const name = input.points[i].name.trim();
-    if (name === '') {
+    if (input.points[i].name.trim() === '') {
       errors.push(`第 ${i + 1} 个落点的名称为空。`);
-    } else if (seenNames.has(name)) {
-      errors.push(`落点名称「${name}」重复，具名落点必须可唯一识别。`);
-    } else {
-      seenNames.add(name);
     }
   }
 
@@ -174,36 +169,58 @@ export function solveSimilarity(input: TransformInput): SolveOutcome {
   const tx = fA.x - scale * (cos * input.A.x - sin * input.A.y);
   const ty = fA.y - scale * (sin * input.A.x + cos * input.A.y);
   if (![tx, ty].every(Number.isFinite)) {
-    errors.push('平移量计算结果不是有限数。');
+    errors.push('基准点坐标过大，平移量计算超出数值范围，请缩小输入量级。');
     return { ok: false, errors };
   }
 
-  const rows: NamedResultRow[] = input.points.map((p) => {
-    const site = forward(p);
-    const back = reverse(site);
-    return {
-      name: p.name.trim(),
-      design: { x: p.x, y: p.y },
-      site,
-      back,
-      residual: distance(p, back),
-    };
-  });
-
+  const checkA = forward(input.A);
+  const checkB = forward(input.B);
   const baseChecks: BaseCheck[] = [
     {
       label: 'A → A′',
       expected: input.Ap,
-      actual: forward(input.A),
-      residual: distance(input.Ap, forward(input.A)),
+      actual: checkA,
+      residual: distance(input.Ap, checkA),
     },
     {
       label: 'B → B′',
       expected: input.Bp,
-      actual: forward(input.B),
-      residual: distance(input.Bp, forward(input.B)),
+      actual: checkB,
+      residual: distance(input.Bp, checkB),
     },
   ];
+  for (const c of baseChecks) {
+    if (![c.actual.x, c.actual.y, c.residual].every(Number.isFinite)) {
+      errors.push(
+        `基准复核「${c.label}」计算超出数值范围，请缩小基准点坐标量级。`,
+      );
+    }
+  }
+
+  const rows: NamedResultRow[] = [];
+  for (let i = 0; i < input.points.length; i++) {
+    const p = input.points[i];
+    const site = forward(p);
+    const back = reverse(site);
+    const residual = distance(p, back);
+    if (
+      ![site.x, site.y, back.x, back.y, residual].every(Number.isFinite)
+    ) {
+      errors.push(
+        `落点「${p.name.trim() || `第 ${i + 1} 个`}」坐标过大，现场坐标或复核量计算超出数值范围，请缩小输入量级。`,
+      );
+      // 继续遍历以便一次性列出所有越界落点，但最终整批拒绝
+      continue;
+    }
+    rows.push({
+      name: p.name.trim(),
+      design: { x: p.x, y: p.y },
+      site,
+      back,
+      residual,
+    });
+  }
+  if (errors.length > 0) return { ok: false, errors };
 
   return {
     ok: true,
