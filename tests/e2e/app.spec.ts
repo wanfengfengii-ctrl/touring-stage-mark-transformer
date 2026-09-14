@@ -27,6 +27,19 @@ async function fillPoint(page: Page, n: number, name: string, x: string, y: stri
   await page.getByLabel(`第 ${n} 个落点（${name}）y`).fill(y);
 }
 
+async function setTolerance(page: Page, value: string) {
+  await page.getByLabel('全局允许偏差（毫米）', { exact: true }).fill(value);
+}
+
+async function fillSurvey(page: Page, n: number, name: string, x: string, y: string) {
+  await page.getByLabel(`第 ${n} 个落点（${name}）现场复测 x`).fill(x);
+  await page.getByLabel(`第 ${n} 个落点（${name}）现场复测 y`).fill(y);
+}
+
+function surveyRow(page: Page, n: number) {
+  return page.getByTestId('survey-table').locator('tbody tr[data-testid="survey-row"]').nth(n);
+}
+
 test.describe('坐标换算台', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
@@ -222,5 +235,191 @@ test.describe('坐标换算台', () => {
     await expect(page.getByTestId('result-table')).toHaveCount(0);
     await expect(page.getByText('Infinity')).toHaveCount(0);
     await expect(page.getByText('—')).toHaveCount(0);
+  });
+
+  test.describe('现场复测核对', () => {
+    test('未使用复测功能时行为不变：换算成功前无复测面板，默认全部未录入', async ({ page }) => {
+      await expect(page.getByRole('region', { name: '现场复测核对' })).toHaveCount(0);
+      await fillBases(page, {
+        ax: '0', ay: '0', bx: '1000', by: '0',
+        apx: '100', apy: '200', bpx: '100', bpy: '1200',
+      });
+      await fillPoint(page, 1, '落点 1', '100', '0');
+      await fillPoint(page, 2, '落点 2', '0', '100');
+
+      const panel = page.getByRole('region', { name: '现场复测核对' });
+      await expect(panel).toBeVisible();
+      const statuses = page.getByTestId('survey-status');
+      await expect(statuses.nth(0)).toHaveText('未录入');
+      await expect(statuses.nth(1)).toHaveText('未录入');
+      await expect(page.getByTestId('survey-idle-note')).toBeVisible();
+    });
+
+    test('全精度判定：旋转+缩放下，按页面展示的期望坐标会得到相反结论，证明判定未使用舍入坐标', async ({ page }) => {
+      // 设计基准 (0,0)-(10000,0)；现场基准 (0,0)-(0,3333.2)：
+      // s = 3333.2/10000 = 0.33332，θ = +90°。
+      // 落点 1 设计 (0,-300)：全精度期望现场 (s*300, 0) = (99.996, 0)，
+      // 但期望现场坐标两位小数展示为 100.00；允许偏差 0.006（本身小于 0.01 mm）。
+      await fillBases(page, {
+        ax: '0', ay: '0', bx: '10000', by: '0',
+        apx: '0', apy: '0', bpx: '0', bpy: '3333.2',
+      });
+      await fillPoint(page, 1, '复测点', '0', '-300');
+      await fillPoint(page, 2, '参照点', '0', '0');
+
+      const row0 = surveyRow(page, 0);
+      // 前置断言：期望现场 x 展示为 100.00（全精度实为 99.996）
+      await expect(row0.locator('td').nth(1)).toHaveText('100.00');
+      await setTolerance(page, '0.006');
+
+      // 笔一：复测 (100.005, 0)。
+      // 全精度差 |100.005−99.996|≈0.009 > 0.006 -> 超差，展示直线偏差 0.01；
+      // 若判定误用页面展示的期望 100.00，则偏差仅 0.005 ≤ 0.006，会被误判合格。
+      await fillSurvey(page, 1, '复测点', '100.005', '0');
+      await expect(row0.locator('td').nth(7)).toHaveText('0.01');
+      await expect(row0.getByTestId('survey-status')).toHaveText('超差');
+
+      // 笔二：复测 (99.991, 0)。
+      // 全精度差 |99.996−99.991|≈0.005 ≤ 0.006 -> 合格，展示直线偏差 0.00；
+      // 若判定误用页面展示的期望 100.00，则偏差 0.009（展示 0.01）> 0.006，会被误判超差。
+      await fillSurvey(page, 1, '复测点', '99.991', '0');
+      await expect(row0.locator('td').nth(7)).toHaveText('0.00');
+      await expect(row0.getByTestId('survey-status')).toHaveText('合格');
+      // 期望现场坐标的展示仍是 100.00，换算结果未被复测改动
+      await expect(row0.locator('td').nth(1)).toHaveText('100.00');
+    });
+
+    test('合格值改为超差值后即时更新，其余行与换算坐标不变', async ({ page }) => {
+      await fillBases(page, {
+        ax: '0', ay: '0', bx: '1000', by: '0',
+        apx: '100', apy: '200', bpx: '100', bpy: '1200',
+      });
+      await fillPoint(page, 1, '灯位', '100', '0'); // -> (100,300)
+      await fillPoint(page, 2, '灯位', '0', '100'); // -> (0,200)
+      await setTolerance(page, '5');
+      await fillSurvey(page, 1, '灯位', '100', '300');
+      await fillSurvey(page, 2, '灯位', '0', '200');
+
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('合格');
+      await expect(surveyRow(page, 1).getByTestId('survey-status')).toHaveText('合格');
+
+      // 第 1 行复测 x 由 100 改为 110：直线偏差 10 > 5，立即超差
+      await page.getByLabel('第 1 个落点（灯位）现场复测 x').fill('110');
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('超差');
+      await expect(surveyRow(page, 0).locator('td').nth(7)).toHaveText('10.00');
+      // 其余行仍合格
+      await expect(surveyRow(page, 1).getByTestId('survey-status')).toHaveText('合格');
+      // 换算坐标完全不变
+      const results = page.getByTestId('result-table').locator('tbody tr');
+      await expect(results.nth(0).locator('td').nth(3)).toHaveText('100.00');
+      await expect(results.nth(0).locator('td').nth(4)).toHaveText('300.00');
+      await expect(results.nth(1).locator('td').nth(3)).toHaveText('0.00');
+      await expect(results.nth(1).locator('td').nth(4)).toHaveText('200.00');
+      // 基准复核保留
+      await expect(page.getByText('A → A′')).toBeVisible();
+
+      // 改回合格值即时恢复
+      await page.getByLabel('第 1 个落点（灯位）现场复测 x').fill('100');
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('合格');
+    });
+
+    test('边界：直线偏差恰等于允许偏差（3-4-5）判合格，并正确分解纵向/横向差', async ({ page }) => {
+      await fillBases(page, {
+        ax: '0', ay: '0', bx: '1000', by: '0',
+        apx: '100', apy: '200', bpx: '100', bpy: '1200',
+      });
+      await fillPoint(page, 1, 'P1', '100', '0'); // 期望 (100,300)
+      await fillPoint(page, 2, 'P2', '0', '0');
+      await setTolerance(page, '5');
+      // 实测 (103,304)：现场基准沿 +y，纵向 +4、横向 −3、直线恰为 5
+      await fillSurvey(page, 1, 'P1', '103', '304');
+      const row = surveyRow(page, 0);
+      await expect(row.getByTestId('survey-status')).toHaveText('合格');
+      await expect(row.locator('td').nth(5)).toHaveText('+4.00'); // 纵向差
+      await expect(row.locator('td').nth(6)).toHaveText('-3.00'); // 横向差
+      await expect(row.locator('td').nth(7)).toHaveText('5.00'); // 直线偏差
+    });
+
+    test('只填一个坐标或非有限数：该行输入无效并在控件附近说明，其他行与换算保留，修正后恢复', async ({ page }) => {
+      await fillBases(page, {
+        ax: '0', ay: '0', bx: '1000', by: '0',
+        apx: '0', apy: '0', bpx: '1000', bpy: '0',
+      });
+      await fillPoint(page, 1, 'P1', '100', '0');
+      await fillPoint(page, 2, 'P2', '0', '0');
+      await setTolerance(page, '5');
+
+      // 只填复测 x
+      await page.getByLabel('第 1 个落点（P1）现场复测 x').fill('100');
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('输入无效');
+      await expect(page.getByText('复测 y 为空')).toBeVisible();
+      await expect(page.getByLabel('第 1 个落点（P1）现场复测 y')).toHaveAttribute('aria-invalid', 'true');
+      // 另一行未录入、换算结果仍保留
+      await expect(surveyRow(page, 1).getByTestId('survey-status')).toHaveText('未录入');
+      await expect(page.getByTestId('result-table')).toBeVisible();
+
+      // y 改成非有限数
+      await page.getByLabel('第 1 个落点（P1）现场复测 y').fill('abc');
+      await expect(page.getByText(/abc.*有限数/)).toBeVisible();
+
+      // 修正后即时恢复合格（与期望重合）
+      await page.getByLabel('第 1 个落点（P1）现场复测 y').fill('0');
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('合格');
+    });
+
+    test('允许偏差为空/非有限/负数时无法核对并在控件附近说明；修正后恢复', async ({ page }) => {
+      await fillBases(page, {
+        ax: '0', ay: '0', bx: '1000', by: '0',
+        apx: '0', apy: '0', bpx: '1000', bpy: '0',
+      });
+      await fillPoint(page, 1, 'P1', '100', '0');
+      await fillPoint(page, 2, 'P2', '0', '0');
+      await fillSurvey(page, 1, 'P1', '100', '0');
+
+      // 为空（初始状态）
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('输入无效');
+      await expect(page.getByTestId('survey-tolerance-error')).toContainText('允许偏差');
+      await expect(surveyRow(page, 1).getByTestId('survey-status')).toHaveText('未录入');
+
+      await setTolerance(page, 'xyz');
+      await expect(page.getByTestId('survey-tolerance-error')).toContainText('有限数');
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('输入无效');
+
+      await setTolerance(page, '-1');
+      await expect(page.getByTestId('survey-tolerance-error')).toContainText('负数');
+
+      await setTolerance(page, '0');
+      await expect(page.getByTestId('survey-tolerance-error')).toHaveCount(0);
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('合格');
+    });
+
+    test('动态增删与同名落点：复测按内部标识关联，删除后不串到其他行', async ({ page }) => {
+      await fillBases(page, {
+        ax: '0', ay: '0', bx: '1000', by: '0',
+        apx: '0', apy: '0', bpx: '1000', bpy: '0',
+      });
+      await fillPoint(page, 1, '灯位', '100', '0');
+      await fillPoint(page, 2, '灯位', '0', '100');
+      await setTolerance(page, '5');
+      await fillSurvey(page, 1, '灯位', '110', '0'); // 第 1 行超差
+      await fillSurvey(page, 2, '灯位', '0', '100'); // 第 2 行合格
+
+      // 删除第 1 行（超差行）
+      await page.getByRole('button', { name: '删除第 1 个落点' }).click();
+      await expect(page.getByTestId('survey-table').locator('tbody tr[data-testid="survey-row"]')).toHaveCount(1);
+      // 剩余行必须仍是原第 2 行的复测数据 (0,100) 且合格，不得串成 (110,0)
+      await expect(page.getByLabel('第 1 个落点（灯位）现场复测 x')).toHaveValue('0');
+      await expect(page.getByLabel('第 1 个落点（灯位）现场复测 y')).toHaveValue('100');
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('合格');
+
+      // 新增一行（同名），新行复测为空且未录入，原行不受影响
+      await page.getByTestId('add-point').click();
+      await page.getByLabel('第 2 个落点名称').fill('灯位');
+      await page.getByLabel('第 2 个落点（灯位）x').fill('50');
+      await page.getByLabel('第 2 个落点（灯位）y').fill('50');
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('合格');
+      await expect(surveyRow(page, 1).getByTestId('survey-status')).toHaveText('未录入');
+      await expect(page.getByLabel('第 2 个落点（灯位）现场复测 x')).toHaveValue('');
+    });
   });
 });

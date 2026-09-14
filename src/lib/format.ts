@@ -42,6 +42,19 @@ export function formatMm(value: number): string {
   return fixedOrDash(value, 2);
 }
 
+/**
+ * 带方向的毫米偏差（横向差/纵向差），固定两位小数并显式标注正负号：
+ * 正号表示沿规定方向为正（纵向沿 A′→B′、横向沿其逆时针 90° 方向）。
+ * 0 不加正号。
+ */
+export function formatSignedMm(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  if (Object.is(value, 0)) return '0.00';
+  const text = fixedOrDash(value, 2);
+  if (text === '—') return '—';
+  return value > 0 && !text.startsWith('-') ? `+${text}` : text;
+}
+
 /** 旋转角（度），两位小数。 */
 export function formatDegrees(value: number): string {
   if (!Number.isFinite(value)) return '—';

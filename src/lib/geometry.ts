@@ -275,3 +275,229 @@ export function solveSimilarity(input: TransformInput): SolveOutcome {
     value: { scale, theta, thetaDeg, tx, ty, rows, baseChecks },
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* 现场复测核对                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 复测行状态：
+ * - unentered：x/y 均为空，未录入，不影响换算与其他行；
+ * - invalid：只填一个坐标、非有限数、超出数值范围，或容差无效；
+ * - pass / fail：成对有限录入后，按【全精度】直线偏差与允许偏差比较。
+ */
+export type SurveyRowStatus = 'unentered' | 'invalid' | 'pass' | 'fail';
+
+export interface SurveyRowResult {
+  /** 与落点行的内部标识对应（绝不按同名落点名称关联） */
+  id: number;
+  status: SurveyRowStatus;
+  /** 行级原因说明（显示在对应控件附近） */
+  reason?: string;
+  /** 哪些复测输入框非法（用于标红对应控件） */
+  xInvalid?: boolean;
+  yInvalid?: boolean;
+  /** 现场复测坐标（成对有限录入时存在） */
+  measured?: Point;
+  /** 换算产生的全精度期望现场坐标 */
+  expected?: Point;
+  /** 纵向差（毫米）：沿现场基准 A′→B′ 方向为正 */
+  longitudinal?: number;
+  /** 横向差（毫米）：沿 A′→B′ 逆时针旋转 90° 方向为正（线路左侧） */
+  lateral?: number;
+  /** 直线偏差（毫米）：实测点与全精度期望现场点的距离 */
+  linear?: number;
+}
+
+export type SurveyToleranceState =
+  | { ok: true; value: number }
+  | { ok: false; empty: boolean; reason: string };
+
+/** 解析允许偏差原始文本：空白 / 非有限数 / 负数 均为非法。 */
+export function validateTolerance(raw: string): SurveyToleranceState {
+  const r = parseFinite(raw);
+  if (!r.ok) {
+    return r.empty
+      ? {
+          ok: false,
+          empty: true,
+          reason: '请填写全局允许偏差（非负毫米数），否则暂不判定。',
+        }
+      : {
+          ok: false,
+          empty: false,
+          reason: `允许偏差 “${raw.trim()}” 不是有限数。`,
+        };
+  }
+  if (r.value < 0) {
+    return { ok: false, empty: false, reason: '允许偏差不能为负数。' };
+  }
+  // 允许偏差按毫米两位小数展示（×100），溢出则无法安全展示
+  if (!Number.isFinite(r.value * MM_FACTOR)) {
+    return {
+      ok: false,
+      empty: false,
+      reason: '允许偏差过大，超出数值范围。',
+    };
+  }
+  return { ok: true, value: r.value };
+}
+
+export interface SurveyRowInput {
+  id: number;
+  rawX: string;
+  rawY: string;
+}
+
+export interface EvaluateSurveysInput {
+  /**
+   * 现场基准有向向量 d′ = B′ − A′，仅取其方向分解横向/纵向差
+   * （换算成功时长度必然大于 0）。
+   */
+  siteDirection: Point;
+  /** 按内部标识对齐的全精度期望现场坐标 */
+  expectedById: Map<number, Point>;
+  toleranceRaw: string;
+  rows: SurveyRowInput[];
+}
+
+export interface EvaluateSurveysResult {
+  tolerance: SurveyToleranceState;
+  rows: SurveyRowResult[];
+}
+
+/**
+ * 逐行核对此前已成功的相似变换结果与现场复测坐标。
+ *
+ * 横向差/纵向差/直线偏差全部用相似变换产生的【全精度】现场坐标计算，
+ * 不经过任何展示舍入；合格判定为 直线偏差 ≤ 允许偏差（边界合格）。
+ * 本函数不参与落点换算：任何复测输入问题都不会改动换算结果或基准复核。
+ */
+export function evaluateSurveys(
+  input: EvaluateSurveysInput,
+): EvaluateSurveysResult {
+  const tolerance = validateTolerance(input.toleranceRaw);
+  const dirLen = Math.hypot(input.siteDirection.x, input.siteDirection.y);
+
+  const rows: SurveyRowResult[] = input.rows.map((r) => {
+    const px = parseFinite(r.rawX);
+    const py = parseFinite(r.rawY);
+    const xEmpty = !px.ok && px.empty;
+    const yEmpty = !py.ok && py.empty;
+
+    // 两个坐标都为空：未录入，不影响任何其他逻辑
+    if (xEmpty && yEmpty) return { id: r.id, status: 'unentered' };
+
+    const problems: string[] = [];
+    let xInvalid = false;
+    let yInvalid = false;
+    if (xEmpty) {
+      xInvalid = true;
+      problems.push('复测 x 为空：现场复测坐标需与 y 成对录入。');
+    }
+    if (yEmpty) {
+      yInvalid = true;
+      problems.push('复测 y 为空：现场复测坐标需与 x 成对录入。');
+    }
+    if (!px.ok && !px.empty) {
+      xInvalid = true;
+      problems.push(`复测 x “${r.rawX.trim()}” 不是有限数。`);
+    }
+    if (!py.ok && !py.empty) {
+      yInvalid = true;
+      problems.push(`复测 y “${r.rawY.trim()}” 不是有限数。`);
+    }
+    if (problems.length > 0) {
+      return {
+        id: r.id,
+        status: 'invalid',
+        reason: problems.join(''),
+        xInvalid,
+        yInvalid,
+      };
+    }
+
+    const measured: Point = {
+      x: px.ok ? px.value : NaN,
+      y: py.ok ? py.value : NaN,
+    };
+    // 复测坐标本身需能按毫米两位小数展示
+    if (
+      !displaySafe(measured.x, MM_FACTOR) ||
+      !displaySafe(measured.y, MM_FACTOR)
+    ) {
+      return {
+        id: r.id,
+        status: 'invalid',
+        xInvalid,
+        yInvalid,
+        reason: '复测坐标过大，超出数值范围，无法核对。',
+      };
+    }
+
+    const expected = input.expectedById.get(r.id);
+    if (!expected) return { id: r.id, status: 'unentered' };
+
+    // 允许偏差无效时，成对录入的行无法判定（未录入行仍保持未录入）
+    if (!tolerance.ok) {
+      return {
+        id: r.id,
+        status: 'invalid',
+        measured,
+        expected,
+        reason: '允许偏差未设置为有效的非负数值，暂无法核对。',
+      };
+    }
+    if (!(dirLen > 0)) {
+      return {
+        id: r.id,
+        status: 'invalid',
+        measured,
+        expected,
+        reason: '现场基准方向无效，无法分解横向/纵向差。',
+      };
+    }
+
+    // 全精度差值：切勿先把 expected 舍入到 0.01 mm 再比较
+    const dx = measured.x - expected.x;
+    const dy = measured.y - expected.y;
+    if (!displaySafe(dx, MM_FACTOR) || !displaySafe(dy, MM_FACTOR)) {
+      return {
+        id: r.id,
+        status: 'invalid',
+        measured,
+        expected,
+        reason: '复测偏差过大，超出数值范围，无法核对。',
+      };
+    }
+
+    const ux = input.siteDirection.x / dirLen; // 纵向单位向量（A′→B′）
+    const uy = input.siteDirection.y / dirLen;
+    const longitudinal = dx * ux + dy * uy;
+    // 纵向方向逆时针转 90°：(ux,uy) -> (-uy,ux)，即线路左侧为正
+    const lateral = dx * -uy + dy * ux;
+    const linear = Math.hypot(dx, dy);
+    if (!Number.isFinite(linear)) {
+      return {
+        id: r.id,
+        status: 'invalid',
+        measured,
+        expected,
+        reason: '复测直线偏差超出数值范围，无法核对。',
+      };
+    }
+
+    return {
+      id: r.id,
+      // 恰好位于边界也判合格
+      status: linear <= tolerance.value ? 'pass' : 'fail',
+      measured,
+      expected,
+      longitudinal,
+      lateral,
+      linear,
+    };
+  });
+
+  return { tolerance, rows };
+}

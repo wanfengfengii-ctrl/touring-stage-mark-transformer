@@ -1,15 +1,19 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import {
+  evaluateSurveys,
   parseFinite,
   solveSimilarity,
+  type EvaluateSurveysResult,
   type NamedPoint,
   type SimilarityResult,
+  type SurveyRowResult,
 } from './lib/geometry';
 import {
   formatDegrees,
   formatMm,
   formatPercent,
   formatScale,
+  formatSignedMm,
   formatTolerance,
 } from './lib/format';
 
@@ -30,6 +34,9 @@ interface RawNamed {
   name: string;
   x: string;
   y: string;
+  /** 现场复测坐标（按内部 id 挂接；行删除后随之消失，绝不串到同名其他行） */
+  sx: string;
+  sy: string;
 }
 
 const EMPTY_BASE: BaseState = {
@@ -46,8 +53,8 @@ const EMPTY_BASE: BaseState = {
 let nextPointId = 3;
 
 const INITIAL_POINTS: RawNamed[] = [
-  { id: 1, name: '落点 1', x: '', y: '' },
-  { id: 2, name: '落点 2', x: '', y: '' },
+  { id: 1, name: '落点 1', x: '', y: '', sx: '', sy: '' },
+  { id: 2, name: '落点 2', x: '', y: '', sx: '', sy: '' },
 ];
 
 interface FieldProps {
@@ -202,10 +209,175 @@ function ResultPanel({ result }: { result: SimilarityResult }) {
   );
 }
 
+const STATUS_TEXT: Record<SurveyRowResult['status'], string> = {
+  unentered: '未录入',
+  invalid: '输入无效',
+  pass: '合格',
+  fail: '超差',
+};
+
+interface SurveyPanelProps {
+  points: RawNamed[];
+  expectedById: Map<number, { x: number; y: number }>;
+  survey: EvaluateSurveysResult;
+  toleranceRaw: string;
+  onToleranceChange: (value: string) => void;
+  onSurveyChange: (id: number, key: 'sx' | 'sy', value: string) => void;
+}
+
+function SurveyPanel({
+  points,
+  expectedById,
+  survey,
+  toleranceRaw,
+  onToleranceChange,
+  onSurveyChange,
+}: SurveyPanelProps) {
+  const surveyById = new Map(survey.rows.map((r) => [r.id, r]));
+  const anyEntered = points.some((p) => p.sx.trim() !== '' || p.sy.trim() !== '');
+  // 容差为空是未启用复测时的默认态（不打扰）；一旦录入了复测坐标，
+  // 或用户显式填了非有限/负数值，则在控件附近说明原因。
+  const toleranceProblem =
+    !survey.tolerance.ok && (!survey.tolerance.empty || anyEntered);
+
+  return (
+    <section className="results survey-panel" aria-label="现场复测核对">
+      <h2>现场复测核对</h2>
+
+      <div className="tolerance-row">
+        <div className="field tolerance-field">
+          <label htmlFor="survey-tolerance">全局允许偏差 (mm)</label>
+          <input
+            id="survey-tolerance"
+            data-testid="survey-tolerance"
+            type="text"
+            inputMode="decimal"
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="例如 5"
+            value={toleranceRaw}
+            aria-label="全局允许偏差（毫米）"
+            aria-invalid={toleranceProblem || undefined}
+            onChange={(e) => onToleranceChange(e.target.value)}
+          />
+          {toleranceProblem && !survey.tolerance.ok && (
+            <p className="field-error" role="alert" data-testid="survey-tolerance-error">
+              {survey.tolerance.reason}
+            </p>
+          )}
+        </div>
+        <p className="note tolerance-note">
+          为既有落点成对录入现场复测坐标后立即核对；横向差、纵向差、直线偏差与合格判定
+          均由相似变换产生的全精度现场坐标计算（不使用展示舍入值），偏差展示到 0.01 mm；
+          直线偏差 ≤ 允许偏差 判合格（恰好位于边界也合格）。
+        </p>
+      </div>
+
+      <table className="data-table survey-table" data-testid="survey-table">
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>期望现场 x (mm)</th>
+            <th>期望现场 y (mm)</th>
+            <th>复测 x (mm)</th>
+            <th>复测 y (mm)</th>
+            <th>纵向差 (mm)</th>
+            <th>横向差 (mm)</th>
+            <th>直线偏差 (mm)</th>
+            <th>核对状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          {points.map((p, i) => {
+            const s = surveyById.get(p.id);
+            const status = s?.status ?? 'unentered';
+            const expected = expectedById.get(p.id);
+            const label = p.name.trim() || `第 ${i + 1} 个`;
+            return (
+              <Fragment key={p.id}>
+                <tr className="survey-row" data-testid="survey-row" data-state={status}>
+                  <td>{label}</td>
+                  <td>{expected ? formatMm(expected.x) : '—'}</td>
+                  <td>{expected ? formatMm(expected.y) : '—'}</td>
+                  <td>
+                    <input
+                      id={`survey-x-${p.id}`}
+                      className="survey-input"
+                      type="text"
+                      inputMode="decimal"
+                      spellCheck={false}
+                      autoComplete="off"
+                      value={p.sx}
+                      aria-label={`第 ${i + 1} 个落点（${label}）现场复测 x`}
+                      aria-invalid={s?.xInvalid || undefined}
+                      onChange={(e) => onSurveyChange(p.id, 'sx', e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      id={`survey-y-${p.id}`}
+                      className="survey-input"
+                      type="text"
+                      inputMode="decimal"
+                      spellCheck={false}
+                      autoComplete="off"
+                      value={p.sy}
+                      aria-label={`第 ${i + 1} 个落点（${label}）现场复测 y`}
+                      aria-invalid={s?.yInvalid || undefined}
+                      onChange={(e) => onSurveyChange(p.id, 'sy', e.target.value)}
+                    />
+                  </td>
+                  <td className="deviation">
+                    {s?.longitudinal === undefined
+                      ? '—'
+                      : formatSignedMm(s.longitudinal)}
+                  </td>
+                  <td className="deviation">
+                    {s?.lateral === undefined ? '—' : formatSignedMm(s.lateral)}
+                  </td>
+                  <td className="deviation">
+                    {s?.linear === undefined ? '—' : formatMm(s.linear)}
+                  </td>
+                  <td>
+                    <span
+                      className={`survey-status survey-status--${status}`}
+                      data-testid="survey-status"
+                      data-state={status}
+                    >
+                      {STATUS_TEXT[status]}
+                    </span>
+                  </td>
+                </tr>
+                {status === 'invalid' && s?.reason && (
+                  <tr className="survey-reason-row" data-testid="survey-reason-row">
+                    <td colSpan={9}>
+                      <span className="field-error">{s.reason}</span>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="note">
+        纵向差沿现场基准 A′→B′ 方向为正；横向差沿该方向逆时针转 90°（线路左侧）为正。
+        状态按全精度直线偏差判定：合格 ≤ 允许偏差，超出为超差；每行复测坐标均为空时为未录入。
+      </p>
+      {!anyEntered && (
+        <p className="note" data-testid="survey-idle-note">
+          尚未录入复测坐标：复测功能为可选项，不录入时不影响换算结果与基准复核。
+        </p>
+      )}
+    </section>
+  );
+}
+
 export default function App() {
   const [base, setBase] = useState<BaseState>(EMPTY_BASE);
   const [points, setPoints] = useState<RawNamed[]>(INITIAL_POINTS);
   const [dirty, setDirty] = useState(false);
+  const [toleranceRaw, setToleranceRaw] = useState('');
 
   const parsed = useMemo(() => {
     const errors: string[] = [];
@@ -266,6 +438,31 @@ export default function App() {
     return { errors: [] as string[], invalid, result: solved.value };
   }, [base, points]);
 
+  /**
+   * 复测核对完全独立于换算：仅在换算成功后，用全精度现场坐标逐行核对。
+   * 期望坐标按内部 id 对齐（result.rows 与 points 同序），
+   * 因此同名落点、动态增删都不会串行。
+   */
+  const survey = useMemo(() => {
+    const result = parsed.result;
+    if (!result) return null;
+    const expectedById = new Map<number, { x: number; y: number }>();
+    points.forEach((p, i) => {
+      const row = result.rows[i];
+      if (row) expectedById.set(p.id, row.site);
+    });
+    // 现场基准方向直接取自基准复核的全精度实际映射点（A→A′、B→B′）
+    const a = result.baseChecks[0].actual;
+    const b = result.baseChecks[1].actual;
+    const evaluation = evaluateSurveys({
+      siteDirection: { x: b.x - a.x, y: b.y - a.y },
+      expectedById,
+      toleranceRaw,
+      rows: points.map((p) => ({ id: p.id, rawX: p.sx, rawY: p.sy })),
+    });
+    return { evaluation, expectedById };
+  }, [parsed.result, points, toleranceRaw]);
+
   const updateBase = (key: BaseKey, value: string) => {
     setDirty(true);
     setBase((prev) => ({ ...prev, [key]: value }));
@@ -283,13 +480,20 @@ export default function App() {
     const id = nextPointId++;
     setPoints((prev) => [
       ...prev,
-      { id, name: `落点 ${id}`, x: '', y: '' },
+      { id, name: `落点 ${id}`, x: '', y: '', sx: '', sy: '' },
     ]);
   };
 
   const removePoint = (id: number) => {
     setDirty(true);
+    // 复测坐标挂在同一行状态上：删除即连同复测数据一起消失，不会串到其他行
     setPoints((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const updateSurvey = (id: number, key: 'sx' | 'sy', value: string) => {
+    setPoints((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, [key]: value } : p)),
+    );
   };
 
   return (
@@ -404,6 +608,16 @@ export default function App() {
       )}
 
       {parsed.result && <ResultPanel result={parsed.result} />}
+      {parsed.result && survey && (
+        <SurveyPanel
+          points={points}
+          expectedById={survey.expectedById}
+          survey={survey.evaluation}
+          toleranceRaw={toleranceRaw}
+          onToleranceChange={setToleranceRaw}
+          onSurveyChange={updateSurvey}
+        />
+      )}
     </main>
   );
 }

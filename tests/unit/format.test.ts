@@ -4,6 +4,7 @@ import {
   formatMm,
   formatPercent,
   formatScale,
+  formatSignedMm,
   formatTolerance,
   roundHalfAway,
 } from '../../src/lib/format';
@@ -59,6 +60,19 @@ describe('formatMm', () => {
 });
 
 describe('其他展示格式', () => {
+  it('带正负号的纵向/横向差：0 不带号，正数显式 +，负数自带 −', () => {
+    expect(formatSignedMm(0)).toBe('0.00');
+    expect(formatSignedMm(-0)).toBe('0.00');
+    expect(formatSignedMm(3)).toBe('+3.00');
+    expect(formatSignedMm(-3.2)).toBe('-3.20');
+    // 半点规则与 formatMm 一致
+    expect(formatSignedMm(0.005)).toBe('+0.01');
+    expect(formatSignedMm(-0.005)).toBe('-0.01');
+    // 非有限数给占位符
+    expect(formatSignedMm(NaN)).toBe('—');
+    expect(formatSignedMm(Infinity)).toBe('—');
+  });
+
   it('缩放率保留六位小数', () => {
     expect(formatScale(2)).toBe('2.000000');
     expect(formatScale(1 / 3)).toBe('0.333333');
