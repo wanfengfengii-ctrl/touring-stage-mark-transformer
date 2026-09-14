@@ -48,6 +48,14 @@ describe('formatMm', () => {
     expect(formatMm(NaN)).toBe('—');
     expect(formatMm(Infinity)).toBe('—');
   });
+
+  it('放大到展示精度后溢出时回退占位符，绝不输出 Infinity', () => {
+    expect(formatMm(1e308)).toBe('—');
+    expect(Number.isNaN(roundHalfAway(1e308, 2))).toBe(true);
+    expect(formatScale(1e308)).toBe('—');
+    expect(formatPercent(1e308)).toBe('—');
+    expect(formatTolerance(1e308)).toBe('—');
+  });
 });
 
 describe('其他展示格式', () => {

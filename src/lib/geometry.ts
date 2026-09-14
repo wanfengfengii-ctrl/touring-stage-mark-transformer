@@ -65,6 +65,19 @@ export type ParseOutcome =
   | { ok: true; value: number }
   | { ok: false; empty: boolean };
 
+/**
+ * 展示层会把数值放大后取固定小数位（毫米 ×100、缩放率 ×10⁶、
+ * 复核闭合差 ×10⁹）。若放大后溢出为 Infinity，页面会出现 Infinity/空缺，
+ * 因此“可计算”还必须“可展示”：value 本身有限且 value×factor 仍有限。
+ */
+function displaySafe(value: number, factor: number): boolean {
+  return Number.isFinite(value) && Number.isFinite(value * factor);
+}
+
+const MM_FACTOR = 100;
+const SCALE_FACTOR = 1e6;
+const TOLERANCE_FACTOR = 1e9;
+
 /** 解析一个数值输入：空白 / 非有限数 都视为非法。 */
 export function parseFinite(raw: string): ParseOutcome {
   const text = raw.trim();
@@ -135,6 +148,12 @@ export function solveSimilarity(input: TransformInput): SolveOutcome {
     errors.push(`缩放率必须为有限正数，当前为 ${String(scale)}。`);
     return { ok: false, errors };
   }
+  if (!displaySafe(scale, SCALE_FACTOR)) {
+    errors.push(
+      `缩放率 ${String(scale)} 过大，超出数值范围（无法安全展示），请缩小基准长度之比。`,
+    );
+    return { ok: false, errors };
+  }
 
   // 两条有向基准向量的 atan2 角差，逆时针为正
   const theta = normalizeAngle(Math.atan2(dp.y, dp.x) - Math.atan2(d.y, d.x));
@@ -168,8 +187,18 @@ export function solveSimilarity(input: TransformInput): SolveOutcome {
   const fA = forward(input.A);
   const tx = fA.x - scale * (cos * input.A.x - sin * input.A.y);
   const ty = fA.y - scale * (sin * input.A.x + cos * input.A.y);
-  if (![tx, ty].every(Number.isFinite)) {
-    errors.push('基准点坐标过大，平移量计算超出数值范围，请缩小输入量级。');
+  if (![tx, ty].every((v) => displaySafe(v, MM_FACTOR))) {
+    errors.push('基准点坐标过大，平移量超出数值范围，请缩小输入量级。');
+    return { ok: false, errors };
+  }
+
+  // 基准点本身（期望值列）也要能按毫米展示
+  if (
+    ![input.Ap.x, input.Ap.y, input.Bp.x, input.Bp.y].every((v) =>
+      displaySafe(v, MM_FACTOR),
+    )
+  ) {
+    errors.push('现场基准点坐标过大，超出数值范围，请缩小输入量级。');
     return { ok: false, errors };
   }
 
@@ -190,9 +219,13 @@ export function solveSimilarity(input: TransformInput): SolveOutcome {
     },
   ];
   for (const c of baseChecks) {
-    if (![c.actual.x, c.actual.y, c.residual].every(Number.isFinite)) {
+    if (
+      !displaySafe(c.actual.x, MM_FACTOR) ||
+      !displaySafe(c.actual.y, MM_FACTOR) ||
+      !displaySafe(c.residual, TOLERANCE_FACTOR)
+    ) {
       errors.push(
-        `基准复核「${c.label}」计算超出数值范围，请缩小基准点坐标量级。`,
+        `基准复核「${c.label}」超出数值范围，请缩小基准点坐标量级。`,
       );
     }
   }
@@ -203,11 +236,26 @@ export function solveSimilarity(input: TransformInput): SolveOutcome {
     const site = forward(p);
     const back = reverse(site);
     const residual = distance(p, back);
+    const label = p.name.trim() || `第 ${i + 1} 个`;
+    // 设计/现场/反算坐标按毫米展示（×100），闭合差按高精度展示（×10⁹）
     if (
-      ![site.x, site.y, back.x, back.y, residual].every(Number.isFinite)
+      !displaySafe(p.x, MM_FACTOR) ||
+      !displaySafe(p.y, MM_FACTOR)
     ) {
       errors.push(
-        `落点「${p.name.trim() || `第 ${i + 1} 个`}」坐标过大，现场坐标或复核量计算超出数值范围，请缩小输入量级。`,
+        `落点「${label}」的设计坐标过大，超出数值范围，请缩小输入量级。`,
+      );
+      continue;
+    }
+    if (
+      !displaySafe(site.x, MM_FACTOR) ||
+      !displaySafe(site.y, MM_FACTOR) ||
+      !displaySafe(back.x, MM_FACTOR) ||
+      !displaySafe(back.y, MM_FACTOR) ||
+      !displaySafe(residual, TOLERANCE_FACTOR)
+    ) {
+      errors.push(
+        `落点「${label}」坐标过大，现场坐标或复核量超出数值范围，请缩小输入量级。`,
       );
       // 继续遍历以便一次性列出所有越界落点，但最终整批拒绝
       continue;

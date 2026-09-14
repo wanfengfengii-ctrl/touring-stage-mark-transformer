@@ -206,11 +206,11 @@ test.describe('坐标换算台', () => {
     await expect(rows.nth(1).locator('td').nth(4)).toHaveText('100.00');
   });
 
-  test('极大但有限的落点坐标导致溢出时整批拒绝，并提示超出计算范围', async ({ page }) => {
-    // 缩放率 2：现场坐标 2×1e308 = Infinity；输入本身仍是有限数
+  test('恒等换算下极大但有限的落点坐标超出展示范围时整批拒绝，并提示超出计算范围', async ({ page }) => {
+    // 恒等基准：现场坐标 = 1e308 本身有限，但两位小数展示需 ×100 → Infinity。
     await fillBases(page, {
       ax: '0', ay: '0', bx: '1000', by: '0',
-      apx: '0', apy: '0', bpx: '2000', bpy: '0',
+      apx: '0', apy: '0', bpx: '1000', bpy: '0',
     });
     await fillPoint(page, 1, '巨值点', '1e308', '0');
     await fillPoint(page, 2, '正常点', '1', '1');
@@ -218,8 +218,9 @@ test.describe('坐标换算台', () => {
     const alert = page.getByRole('alert');
     await expect(alert).toBeVisible();
     await expect(alert).toContainText('超出数值范围');
-    // 不允许出现空缺符号或残缺结果
+    // 整批清除：无结果表、无 Infinity、无空缺符号
     await expect(page.getByTestId('result-table')).toHaveCount(0);
+    await expect(page.getByText('Infinity')).toHaveCount(0);
     await expect(page.getByText('—')).toHaveCount(0);
   });
 });

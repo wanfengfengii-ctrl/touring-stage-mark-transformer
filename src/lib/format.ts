@@ -17,6 +17,8 @@ export function roundHalfAway(value: number, digits = 2): number {
   const factor = 10 ** digits;
   const sign = value < 0 ? -1 : 1;
   const scaled = Math.abs(value) * factor;
+  // 放大到目标小数位后若溢出，无法按该精度表示
+  if (!Number.isFinite(scaled)) return NaN;
   const halfStep = Math.floor(scaled) + 0.5;
   const eps = Number.EPSILON * Math.max(1, halfStep) * 16;
   let rounded: number;
@@ -28,28 +30,36 @@ export function roundHalfAway(value: number, digits = 2): number {
   return (sign * rounded) / factor;
 }
 
+/** 固定小数位；无法安全表示（含溢出）时回退为占位符，绝不输出 Infinity/NaN。 */
+function fixedOrDash(value: number, digits: number): string {
+  const rounded = roundHalfAway(value, digits);
+  return Number.isFinite(rounded) ? rounded.toFixed(digits) : '—';
+}
+
 /** 毫米坐标，固定两位小数。 */
 export function formatMm(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  return roundHalfAway(value, 2).toFixed(2);
+  return fixedOrDash(value, 2);
 }
 
 /** 旋转角（度），两位小数。 */
 export function formatDegrees(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  return `${roundHalfAway(value, 2).toFixed(2)}°`;
+  const text = fixedOrDash(value, 2);
+  return text === '—' ? text : `${text}°`;
 }
 
 /** 缩放率（比值），六位小数。 */
 export function formatScale(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  return roundHalfAway(value, 6).toFixed(6);
+  return fixedOrDash(value, 6);
 }
 
 /** 缩放率百分比，两位小数。 */
 export function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  return `${roundHalfAway(value * 100, 2).toFixed(2)}%`;
+  const text = fixedOrDash(value * 100, 2);
+  return text === '—' ? text : `${text}%`;
 }
 
 /**
@@ -59,6 +69,9 @@ export function formatPercent(value: number): string {
 export function formatTolerance(value: number): string {
   if (!Number.isFinite(value)) return '—';
   if (value === 0) return '0';
-  if (Math.abs(value) < 1e-6) return `${value.toExponential(3)} mm`;
-  return `${roundHalfAway(value, 9).toFixed(9)} mm`;
+  if (Math.abs(value) < 1e-6) {
+    return Number.isFinite(value) ? `${value.toExponential(3)} mm` : '—';
+  }
+  const text = fixedOrDash(value, 9);
+  return text === '—' ? '—' : `${text} mm`;
 }

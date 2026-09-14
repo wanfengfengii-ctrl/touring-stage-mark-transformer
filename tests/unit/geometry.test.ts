@@ -276,6 +276,18 @@ describe('solveSimilarity 无效边界（整批拒绝）', () => {
     expect(r.errors.join(' ')).toContain('超出数值范围');
   });
 
+  it('恒等换算下巨值落点虽数学结果有限，但超出可展示范围时仍整批拒绝', () => {
+    // 现场坐标 = 1e308 本身有限，但展示两位小数需 ×100 → Infinity；
+    // 正确行为是整批拒绝，而不是渲染出 Infinity/空缺。
+    const r = solveSimilarity({
+      ...base,
+      points: [{ name: '巨值点', x: 1e308, y: 0 }],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.join(' ')).toContain('超出数值范围');
+  });
+
   it('缩放率有限但落点映射溢出时，拒绝并提示超出计算范围', () => {
     // 现场向量长 1e150（平方 1e300 仍有限），设计向量长 1000，缩放率 1e147（有限）；
     // 落点 1e308 映射为 1e147·1e308 = Infinity。
