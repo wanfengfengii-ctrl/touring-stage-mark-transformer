@@ -1,0 +1,26 @@
+services:
+  # Web 前端：构建后由 nginx 静态托管
+  # 宿主端口可用环境变量覆盖： WEB_PORT=9000 docker compose up -d
+  web:
+    build:
+      context: .
+      target: web
+    image: stage-transform-web:latest
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    restart: unless-stopped
+
+  # 一次性验收服务：Vitest 单测 -> 类型检查与构建 -> Playwright 端到端（指向 web）
+  # 运行： docker compose --profile verify run --rm verify
+  verify:
+    build:
+      context: .
+      target: verify
+    image: stage-transform-verify:latest
+    environment:
+      E2E_BASE_URL: http://web:80
+    depends_on:
+      web:
+        condition: service_healthy
+    profiles:
+      - verify
