@@ -461,15 +461,6 @@ export function evaluateSurveys(
     // 全精度差值：切勿先把 expected 舍入到 0.01 mm 再比较
     const dx = measured.x - expected.x;
     const dy = measured.y - expected.y;
-    if (!displaySafe(dx, MM_FACTOR) || !displaySafe(dy, MM_FACTOR)) {
-      return {
-        id: r.id,
-        status: 'invalid',
-        measured,
-        expected,
-        reason: '复测偏差过大，超出数值范围，无法核对。',
-      };
-    }
 
     const ux = input.siteDirection.x / dirLen; // 纵向单位向量（A′→B′）
     const uy = input.siteDirection.y / dirLen;
@@ -477,13 +468,23 @@ export function evaluateSurveys(
     // 纵向方向逆时针转 90°：(ux,uy) -> (-uy,ux)，即线路左侧为正
     const lateral = dx * -uy + dy * ux;
     const linear = Math.hypot(dx, dy);
-    if (!Number.isFinite(linear)) {
+
+    // 分量有限不代表合成量可展示：斜向时纵向差/直线偏差可达分量的 √2 倍。
+    // 若合成量放大到展示精度（×100）溢出，就不能给出带空缺的合格/超差结论，
+    // 整行按输入无效处理（绝不输出 Infinity/空缺占位的偏差）。
+    if (
+      !displaySafe(dx, MM_FACTOR) ||
+      !displaySafe(dy, MM_FACTOR) ||
+      !displaySafe(longitudinal, MM_FACTOR) ||
+      !displaySafe(lateral, MM_FACTOR) ||
+      !displaySafe(linear, MM_FACTOR)
+    ) {
       return {
         id: r.id,
         status: 'invalid',
         measured,
         expected,
-        reason: '复测直线偏差超出数值范围，无法核对。',
+        reason: '复测偏差过大，超出数值范围，无法核对。',
       };
     }
 

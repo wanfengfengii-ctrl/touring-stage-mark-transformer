@@ -421,5 +421,36 @@ test.describe('坐标换算台', () => {
       await expect(surveyRow(page, 1).getByTestId('survey-status')).toHaveText('未录入');
       await expect(page.getByLabel('第 2 个落点（灯位）现场复测 x')).toHaveValue('');
     });
+    test('有限极大复测坐标使合成偏差无法按毫米展示时，整行输入无效并说明原因（不得超差却空缺）', async ({ page }) => {
+      // 现场基准方向 45°：A′=(0,0)，B′=(1000,1000)（s=√2）。
+      // 落点设计 (0,0) -> 期望现场 (0,0)；复测 (a,a)，a=1.7e306（有限且 ×100 有限）。
+      // 沿 45° 方向纵向差 = 直线偏差 = a·√2 ≈ 2.4e306，×100 溢出；
+      // 旧实现会判“超差”，但纵向差/直线偏差列渲染成空缺“—”。
+      await fillBases(page, {
+        ax: '0', ay: '0', bx: '1000', by: '0',
+        apx: '0', apy: '0', bpx: '1000', bpy: '1000',
+      });
+      await fillPoint(page, 1, '远点', '0', '0');
+      await fillPoint(page, 2, '近点', '1', '1');
+      await setTolerance(page, '5');
+      await fillSurvey(page, 1, '远点', '1.7e306', '1.7e306');
+
+      const row = surveyRow(page, 0);
+      await expect(row.getByTestId('survey-status')).toHaveText('输入无效');
+      await expect(page.getByText('复测偏差过大，超出数值范围')).toBeVisible();
+      // 纵向差、横向差、直线偏差均不得给出结论/空缺混搭：整行偏差列统一为占位
+      await expect(row.locator('td').nth(5)).toHaveText('—');
+      await expect(row.locator('td').nth(6)).toHaveText('—');
+      await expect(row.locator('td').nth(7)).toHaveText('—');
+      // 复测坐标输入框本身合法（有限、可展示），不标红
+      await expect(page.getByLabel('第 1 个落点（远点）现场复测 x')).not.toHaveAttribute('aria-invalid');
+      // 换算结果与另一行不受影响
+      await expect(page.getByTestId('result-table')).toBeVisible();
+      await expect(surveyRow(page, 1).getByTestId('survey-status')).toHaveText('未录入');
+
+      // 修正为可展示的成对坐标后即时恢复核对
+      await fillSurvey(page, 1, '远点', '0', '0');
+      await expect(surveyRow(page, 0).getByTestId('survey-status')).toHaveText('合格');
+    });
   });
 });

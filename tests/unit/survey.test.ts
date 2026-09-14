@@ -279,4 +279,41 @@ describe('evaluateSurveys 按内部标识对齐（同名落点不串）', () => 
     );
     expect(r.rows.map((x) => x.status)).toEqual(['invalid', 'pass', 'fail']);
   });
+
+  it('有限极大复测坐标导致合成偏差无法按毫米展示时，整行无效（不得出现超差+空缺偏差）', () => {
+    // 复测分量 a=1.7e306 本身有限且 ×100 仍有限；但 45° 方向上纵向差/直线偏差
+    // ≈ a·√2 = 2.40e306，×100 溢出为 Infinity。
+    const a = 1.7e306;
+    expect(Number.isFinite(a * 100)).toBe(true);
+    expect(Number.isFinite(a * Math.SQRT2 * 100)).toBe(false);
+
+    const r = evalRows(
+      new Map([[1, { x: 0, y: 0 }]]),
+      [{ id: 1, rawX: String(a), rawY: String(a) }],
+      '5',
+    );
+    expect(r.rows[0].status).toBe('invalid');
+    expect(r.rows[0].reason).toContain('超出数值范围');
+    // 坐标本身可展示，不应标红坐标输入框
+    expect(r.rows[0].xInvalid).toBeFalsy();
+    expect(r.rows[0].yInvalid).toBeFalsy();
+    // 不给出无法展示的偏差与结论
+    expect(r.rows[0].linear).toBeUndefined();
+    expect(r.rows[0].longitudinal).toBeUndefined();
+    expect(r.rows[0].lateral).toBeUndefined();
+  });
+
+  it('轴向极大偏差本身仍可安全展示时，正常判超差而非误判无效', () => {
+    // 仅 x 方向：纵向差 = 直线偏差 = a，×100 有限，可按毫米展示
+    const a = 1.7e306;
+    const r = evalRows(
+      new Map([[1, { x: 0, y: 0 }]]),
+      [{ id: 1, rawX: String(a), rawY: '0' }],
+      '5',
+    );
+    expect(r.rows[0].status).toBe('fail');
+    expect(r.rows[0].linear).toBe(a);
+    expect(r.rows[0].longitudinal).toBe(a);
+    expect(r.rows[0].lateral).toBe(0);
+  });
 });
