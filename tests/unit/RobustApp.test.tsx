@@ -280,4 +280,71 @@ describe('稳健校准补录区（App 交互）', () => {
     expect(within(surveyRows[1]).getByTestId('survey-status')).toHaveTextContent('未录入');
     expect(screen.getByLabelText('第 1 个落点（落点 1）现场复测 x')).toHaveValue('200');
   });
+
+  it('B 被剔除时复测纵/横向差仍沿录入的 A′→B′ 分解，不切换为 A′→C′', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    // 真模型 s=2、θ=30°、平移 (50,-70)；现场 B′ 带 +100mm 测量失误 → 共识 A、C、D，剔除 B。
+    const th = (30 * Math.PI) / 180;
+    const map = (x: number, y: number) => ({
+      x: 50 + 2 * (Math.cos(th) * x - Math.sin(th) * y),
+      y: -70 + 2 * (Math.sin(th) * x + Math.cos(th) * y),
+    });
+    const A = map(0, 0), B = map(1000, 0), C = map(0, 1000), D = map(1000, 1000);
+    const Bp = { x: B.x + 100, y: B.y }; // 录入现场基准（含失误）
+    const type = (label: string, value: string) =>
+      user.type(screen.getByLabelText(label), value);
+    await type('设计侧 · A · x（毫米）', '0');
+    await type('设计侧 · A · y（毫米）', '0');
+    await type('设计侧 · B · x（毫米）', '1000');
+    await type('设计侧 · B · y（毫米）', '0');
+    await type('现场侧 · A′ · x（毫米）', A.x.toFixed(6));
+    await type('现场侧 · A′ · y（毫米）', A.y.toFixed(6));
+    await type('现场侧 · B′ · x（毫米）', Bp.x.toFixed(6));
+    await type('现场侧 · B′ · y（毫米）', Bp.y.toFixed(6));
+    await type('补录设计侧 · C · x（毫米）', '0');
+    await type('补录设计侧 · C · y（毫米）', '1000');
+    await type('补录设计侧 · D · x（毫米）', '1000');
+    await type('补录设计侧 · D · y（毫米）', '1000');
+    await type('补录现场侧 · C′ · x（毫米）', C.x.toFixed(6));
+    await type('补录现场侧 · C′ · y（毫米）', C.y.toFixed(6));
+    await type('补录现场侧 · D′ · x（毫米）', D.x.toFixed(6));
+    await type('补录现场侧 · D′ · y（毫米）', D.y.toFixed(6));
+    await type('稳健校准 · 异常阈值（毫米，非负）', '5');
+    await type('第 1 个落点（落点 1）x', '500');
+    await type('第 1 个落点（落点 1）y', '500');
+    await type('第 2 个落点（落点 2）x', '0');
+    await type('第 2 个落点（落点 2）y', '0');
+
+    // 前置：B 确实被剔除，落点期望按重估真模型换算
+    expect(screen.getByTestId('robust-banner')).toHaveTextContent('剔除 B');
+    const want = map(500, 500);
+
+    // 沿【录入的】A′→B′（含 +100 失误，方位角约 28.62°）偏移 3mm 录入复测点
+    const dx = Bp.x - A.x;
+    const dy = Bp.y - A.y;
+    const len = Math.hypot(dx, dy);
+    const ux = dx / len;
+    const uy = dy / len;
+    const mx = want.x + 3 * ux;
+    const my = want.y + 3 * uy;
+    await type('全局允许偏差（毫米）', '5');
+    await type('第 1 个落点（落点 1）现场复测 x', mx.toFixed(6));
+    await type('第 1 个落点（落点 1）现场复测 y', my.toFixed(6));
+
+    const row = within(screen.getByTestId('survey-table')).getAllByTestId('survey-row')[0];
+    const cells = within(row).getAllByRole('cell');
+    // 纵向差 = +3.00、横向差 = 0.00：证明分解方向就是录入的 A′→B′
+    expect(cells[5]).toHaveTextContent('+3.00');
+    expect(cells[6]).toHaveTextContent('0.00');
+    expect(cells[7]).toHaveTextContent('3.00');
+    expect(within(row).getByTestId('survey-status')).toHaveTextContent('合格');
+
+    // 反证：A′→C′ 方位角约 120°，与录入 A′→B′（约 28.62°）相差约 91.4°；
+    // 若错误改用 A′→C′ 分解，横向差会接近 3.00 而非 0.00。
+    const acx = C.x - A.x;
+    const acy = C.y - A.y;
+    const cross = ux * acy - uy * acx;
+    expect(Math.abs(cross) / (Math.hypot(acx, acy))).toBeGreaterThan(0.99); // 近垂直
+  });
 });

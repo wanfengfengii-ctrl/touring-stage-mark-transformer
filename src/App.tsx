@@ -616,8 +616,9 @@ export default function App() {
    * 复测核对完全独立于换算：仅在换算成功后，用全精度现场坐标逐行核对。
    * 期望坐标按内部 id 对齐（result.rows 与 points 同序），
    * 因此同名落点、动态增删都不会串行。
-   * 横向/纵向分解方向取前两个【被共识采用】的现场基准（双点校准下即 A′→B′），
-   * 不使用已剔除的离群基准方向。
+   * 纵/横向差的分解方向固定为录入的现场基准 A′→B′（baseChecks 的前两行
+   * A、B 的录入现场点）：即使 B 因测量失误被共识剔除，线路方向定义仍不
+   * 切换到其他基准（例如 A′→C′）；逐点期望现场坐标则只消费重估模型。
    *
    * 稳健校准失败（候选不足/共识少于三点/分母为零/重估溢出）时换算结果清除，
    * 但复测录入仍保留在挂起面板中：期望坐标暂缺、状态“暂不核对”，
@@ -646,9 +647,9 @@ export default function App() {
         const row = result.rows[i];
         if (row) expectedById.set(p.id, row.site);
       });
-      const anchors = result.baseChecks.filter((c) => c.adopted);
-      const a = (anchors[0] ?? result.baseChecks[0]).expected;
-      const b = (anchors[1] ?? result.baseChecks[1] ?? anchors[0]).expected;
+      // 固定使用录入的现场基准 A′、B′（稳健模式下 B 被剔除也不换方向）
+      const a = result.baseChecks[0].expected;
+      const b = result.baseChecks[1].expected;
       const evaluation = evaluateSurveys({
         siteDirection: { x: b.x - a.x, y: b.y - a.y },
         expectedById,
