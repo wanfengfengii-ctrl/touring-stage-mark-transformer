@@ -245,6 +245,64 @@ button:hover {
   text-align: center;
 }
 
+/* ---------------- 稳健校准补录 ---------------- */
+
+.robust-threshold-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.robust-threshold-row .field {
+  flex: 0 0 220px;
+}
+
+.robust-threshold-row .note {
+  flex: 1 1 320px;
+  margin: 22px 0 0;
+}
+
+.robust-banner {
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
+.base-adopt {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.base-adopt--adopted {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.base-adopt--rejected {
+  color: var(--error);
+  border-color: var(--error);
+  background: var(--error-bg);
+}
+
+tr.base-rejected > td {
+  opacity: 0.62;
+}
+
+tr.base-rejected > td:first-child {
+  text-decoration: line-through;
+}
+
 /* ---------------- 现场复测核对 ---------------- */
 
 .survey-panel {
@@ -318,6 +376,11 @@ button:hover {
 
 .survey-status--unentered {
   color: var(--muted);
+}
+
+.survey-status--suspended {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 tr[data-state='invalid'] .survey-input {
